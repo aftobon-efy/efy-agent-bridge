@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-EFY Multi-Agent Slack Bridge — with Scheduled Routines
+EFY Multi-Agent Slack Bridge â with Scheduled Routines
 =======================================================
 Single bridge process that:
 1. Routes @COS Agent mentions to the correct Anthropic Managed Agent by channel
 2. Runs scheduled routines (daily briefing, email triage, etc.) via COS-01
 
 Channel Routing:
-  #inv-capital  →  INV-09 CAPITAL (Investor Relations)
-  #cos-centinela →  COS-01 CENTINELA (Chief of Staff)
+  #inv-capital  â  INV-09 CAPITAL (Investor Relations)
+  #cos-centinela â  COS-01 CENTINELA (Chief of Staff)
 
 Scheduled Routines (COS-01, all times CST/UTC-6):
   - Daily CEO Briefing: 7:00 AM weekdays
@@ -51,7 +51,7 @@ try:
 except ImportError:
     pass
 
-# ─── Configuration ───────────────────────────────────────────────────────────────────
+# âââ Configuration ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def require_env(key: str) -> str:
     val = os.environ.get(key)
@@ -69,7 +69,7 @@ class AgentConfig:
     vault_ids: list[str] = field(default_factory=list)
     resources: list[dict] = field(default_factory=list)
 
-# ─── Agent Registry ──────────────────────────────────────────────────────────
+# âââ Agent Registry ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 AGENT_CONFIGS = {
     "INV-09": AgentConfig(
@@ -94,13 +94,13 @@ AGENT_CONFIGS = {
     ),
 }
 
-# Channel name → Agent code mapping
+# Channel name â Agent code mapping
 CHANNEL_ROUTING = {
     "inv-capital": "INV-09",
     "cos-centinela": "COS-01",
 }
 
-# Will be populated at startup: channel_id → AgentConfig
+# Will be populated at startup: channel_id â AgentConfig
 _channel_agent_map: dict[str, AgentConfig] = {}
 
 # Default agent for unrecognized channels
@@ -124,7 +124,7 @@ MAX_RESPONSE_LENGTH = 3900
 SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").lower() == "true"
 CST = timezone(timedelta(hours=-6))  # America/El_Salvador
 
-# ─── Logging ──────────────────────────────────────────────────────────────────
+# âââ Logging ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,11 +133,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("efy-bridge")
 
-# ─── Anthropic Client ─────────────────────────────────────────────────────────
+# âââ Anthropic Client âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 ant = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# ─── Session Management ──────────────────────────────────────────────────────
+# âââ Session Management ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 _sessions: dict[str, dict] = {}
 _session_lock = threading.Lock()
@@ -173,6 +173,32 @@ def get_or_create_session(agent: AgentConfig, thread_key: str) -> str:
         return session.id
 
 
+def invalidate_session(agent: AgentConfig, thread_key: str) -> None:
+    """Remove a cached session so the next call creates a fresh one."""
+    session_key = f"{agent.code}:{thread_key}"
+    with _session_lock:
+        removed = _sessions.pop(session_key, None)
+        if removed:
+            log.info(f"[{agent.code}] Invalidated session {removed['session_id']} for thread {thread_key}")
+
+
+def _extract_last_assistant_text(session_id: str) -> str:
+    """Extract the last assistant/agent message text from session events."""
+    events = list(ant.beta.sessions.events.list(session_id=session_id, limit=100))
+    assistant_text = ""
+    for ev in events:
+        ev_type = getattr(ev, "type", None)
+        if ev_type in ("agent.message", "assistant.message"):
+            content = getattr(ev, "content", None)
+            if isinstance(content, str):
+                assistant_text = content
+            elif isinstance(content, list):
+                for block in content:
+                    if getattr(block, "type", None) == "text":
+                        assistant_text = block.text
+    return assistant_text
+
+
 def send_and_wait(agent: AgentConfig, session_id: str, message: str) -> str:
     """Send a user message to the agent session and poll until done."""
     log.info(f"[{agent.code}] Sending message to session {session_id}: {message[:80]}...")
@@ -187,43 +213,64 @@ def send_and_wait(agent: AgentConfig, session_id: str, message: str) -> str:
         ],
     )
 
+    # Track state transitions: idle â processing â idle/ready/completed
+    saw_processing = False
+    final_status = None
+
     for attempt in range(MAX_POLL_ATTEMPTS):
         time.sleep(POLL_INTERVAL_SECS)
         sess = ant.beta.sessions.retrieve(session_id=session_id)
         status = sess.status
         log.info(f"  [{agent.code}] Poll {attempt+1}/{MAX_POLL_ATTEMPTS}: status={status}")
 
+        # Track if agent started processing
+        if status in ("processing", "running"):
+            saw_processing = True
+            continue
+
+        # Agent finished: idle (after processing), ready, or completed
         if status in ("ready", "completed", "ended"):
+            final_status = status
             break
+
+        # "idle" only counts as done if we already saw it processing
+        if status == "idle" and saw_processing:
+            final_status = status
+            break
+
+        # If idle but haven't seen processing yet, keep waiting (agent hasn't started)
+        if status == "idle" and not saw_processing:
+            continue
+
+        # Session errored â still try to extract any response the agent sent
         if status in ("failed", "error"):
-            return f"[Error: session ended with status '{status}']"
+            log.warning(f"[{agent.code}] Session status={status}, checking for partial response...")
+            text = _extract_last_assistant_text(session_id)
+            if text:
+                log.info(f"[{agent.code}] Found agent response despite error status")
+                return text
+            return f"[Error: {agent.code} session ended with status '{status}']"
     else:
+        # Timeout â but still check if agent managed to respond
+        log.warning(f"[{agent.code}] Poll timeout, checking for partial response...")
+        text = _extract_last_assistant_text(session_id)
+        if text:
+            log.info(f"[{agent.code}] Found agent response despite poll timeout")
+            return text
         return f"[Error: {agent.code} timed out after 3 minutes]"
 
-    events = list(ant.beta.sessions.events.list(session_id=session_id, limit=100))
-    assistant_text = ""
-    for ev in events:
-        ev_type = getattr(ev, "type", None)
-        if ev_type in ("agent.message", "assistant.message"):
-            content = getattr(ev, "content", None)
-            if isinstance(content, str):
-                assistant_text = content
-            elif isinstance(content, list):
-                for block in content:
-                    if getattr(block, "type", None) == "text":
-                        assistant_text = block.text
-
-    if not assistant_text:
+    text = _extract_last_assistant_text(session_id)
+    if not text:
         return f"[{agent.code} processed the request but returned no text response]"
 
-    return assistant_text
+    return text
 
 
-# ─── Channel Resolution ──────────────────────────────────────────────────────
+# âââ Channel Resolution ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def resolve_channels(client) -> None:
     """Map channel names to IDs at startup using Slack API."""
-    log.info("Resolving channel name → ID mapping...")
+    log.info("Resolving channel name â ID mapping...")
     try:
         result = client.conversations_list(
             types="public_channel,private_channel",
@@ -238,7 +285,7 @@ def resolve_channels(client) -> None:
                 agent = AGENT_CONFIGS.get(agent_code)
                 if agent:
                     _channel_agent_map[ch_id] = agent
-                    log.info(f"  #{ch_name} ({ch_id}) → {agent.code} {agent.name}")
+                    log.info(f"  #{ch_name} ({ch_id}) â {agent.code} {agent.name}")
 
     except Exception as e:
         log.error(f"Failed to resolve channels: {e}")
@@ -251,7 +298,7 @@ def resolve_channels(client) -> None:
             agent = AGENT_CONFIGS.get(agent_code)
             if agent:
                 _channel_agent_map[ch_id] = agent
-                log.info(f"  #{ch_name} ({ch_id}) → {agent.code} {agent.name} (from env)")
+                log.info(f"  #{ch_name} ({ch_id}) â {agent.code} {agent.name} (from env)")
 
 
 def get_agent_for_channel(channel_id: str) -> AgentConfig | None:
@@ -271,7 +318,7 @@ def get_channel_for_agent(agent_code: str) -> str | None:
     return None
 
 
-# ─── Slack App ────────────────────────────────────────────────────────────────
+# âââ Slack App ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 app = App(token=SLACK_BOT_TOKEN)
 
@@ -338,6 +385,11 @@ def _process_agent_request(event, say, client):
         try:
             session_id = get_or_create_session(agent, thread_ts)
             response = send_and_wait(agent, session_id, text)
+
+            # If response indicates an error, invalidate session for next attempt
+            if response.startswith("[Error:"):
+                invalidate_session(agent, thread_ts)
+
             response = format_response(response)
 
             chunks = split_message(response)
@@ -353,12 +405,14 @@ def _process_agent_request(event, say, client):
 
             try:
                 client.reactions_remove(channel=channel, name="hourglass_flowing_sand", timestamp=ts)
-                client.reactions_add(channel=channel, name="white_check_mark", timestamp=ts)
+                emoji = "x" if response.startswith("[Error:") else "white_check_mark"
+                client.reactions_add(channel=channel, name=emoji, timestamp=ts)
             except Exception:
                 pass
 
         except Exception as e:
             log.error(f"[{agent.code}] Error processing message: {e}", exc_info=True)
+            invalidate_session(agent, thread_ts)
             say(
                 text=f"[{agent.code} Bridge error: {str(e)[:200]}]",
                 thread_ts=thread_ts,
@@ -380,7 +434,7 @@ def handle_mention(event, say, client):
         _process_agent_request(event, say, client)
 
 
-# ─── Scheduled Routines ──────────────────────────────────────────────────────
+# âââ Scheduled Routines ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 @dataclass
 class RoutineConfig:
@@ -520,7 +574,7 @@ class RoutineScheduler:
 
         try:
             # Post routine announcement
-            header = f":{routine.emoji}: *{routine.name}* — Routine automática"
+            header = f":{routine.emoji}: *{routine.name}* â Routine automÃ¡tica"
             result = self._slack.chat_postMessage(
                 channel=channel_id,
                 text=header,
@@ -580,30 +634,30 @@ class RoutineScheduler:
 
         routines_by_id = {r.routine_id: r for r in ROUTINES}
 
-        # Daily CEO Briefing — 7:00 AM CST (13:00 UTC) weekdays
+        # Daily CEO Briefing â 7:00 AM CST (13:00 UTC) weekdays
         r = routines_by_id["daily-briefing"]
         schedule.every().day.at("13:00").do(self._safe_run, routine=r, weekday_only=True)
 
-        # Auto Email Triage — every 2h 8AM-6PM CST weekdays
+        # Auto Email Triage â every 2h 8AM-6PM CST weekdays
         # 8 CST=14 UTC, 10=16, 12=18, 14=20, 16=22, 18=00
         r = routines_by_id["email-triage"]
         for utc_hour in ["14:00", "16:00", "18:00", "20:00", "22:00", "00:00"]:
             schedule.every().day.at(utc_hour).do(self._safe_run, routine=r, weekday_only=True)
 
-        # Follow-Up Check — 9:00 AM CST (15:00 UTC) weekdays
+        # Follow-Up Check â 9:00 AM CST (15:00 UTC) weekdays
         r = routines_by_id["follow-up-check"]
         schedule.every().day.at("15:00").do(self._safe_run, routine=r, weekday_only=True)
 
-        # Investor Pipeline Check — 8:00 AM CST (14:30 UTC) weekdays
+        # Investor Pipeline Check â 8:00 AM CST (14:30 UTC) weekdays
         # Offset 30min from triage to avoid collision
         r = routines_by_id["pipeline-check"]
         schedule.every().day.at("14:30").do(self._safe_run, routine=r, weekday_only=True)
 
-        # Weekly Executive Summary — Friday 6:00 PM CST (00:00 UTC Saturday)
+        # Weekly Executive Summary â Friday 6:00 PM CST (00:00 UTC Saturday)
         r = routines_by_id["weekly-summary"]
         schedule.every().saturday.at("00:00").do(self._safe_run, routine=r)
 
-        # Calendar Optimizer — Sunday 7:00 PM CST (01:00 UTC Monday)
+        # Calendar Optimizer â Sunday 7:00 PM CST (01:00 UTC Monday)
         r = routines_by_id["calendar-optimizer"]
         schedule.every().monday.at("01:00").do(self._safe_run, routine=r)
 
@@ -631,7 +685,7 @@ class RoutineScheduler:
         self._running = False
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# âââ Main âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 if __name__ == "__main__":
     log.info("=" * 60)
@@ -642,7 +696,7 @@ if __name__ == "__main__":
         log.info(f"  {code} {agent.name}: {agent.agent_id}")
     log.info("Channel routing:")
     for ch_name, agent_code in CHANNEL_ROUTING.items():
-        log.info(f"  #{ch_name} → {agent_code}")
+        log.info(f"  #{ch_name} â {agent_code}")
     log.info("-" * 60)
 
     # Resolve channel names to IDs
