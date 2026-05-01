@@ -1,15 +1,14 @@
-# edited
 #!/usr/bin/env python3
 """
-EFY Multi-Agent Slack Bridge â with Scheduled Routines
+EFY Multi-Agent Slack Bridge Ã¢ÂÂ with Scheduled Routines
 =======================================================
 Single bridge process that:
 1. Routes @COS Agent mentions to the correct Anthropic Managed Agent by channel
 2. Runs scheduled routines (daily briefing, email triage, etc.) via COS-01
 
 Channel Routing:
-  #inv-capital  â  INV-09 CAPITAL (Investor Relations)
-  #cos-centinela â  COS-01 CENTINELA (Chief of Staff)
+  #inv-capital  Ã¢ÂÂ  INV-09 CAPITAL (Investor Relations)
+  #cos-centinela Ã¢ÂÂ  COS-01 CENTINELA (Chief of Staff)
 
 Scheduled Routines (COS-01, all times CST/UTC-6):
   - Daily CEO Briefing: 7:00 AM weekdays
@@ -52,7 +51,7 @@ try:
 except ImportError:
     pass
 
-# âââ Configuration ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Configuration Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def require_env(key: str) -> str:
     val = os.environ.get(key)
@@ -69,8 +68,19 @@ class AgentConfig:
     environment_id: str
     vault_ids: list[str] = field(default_factory=list)
     resources: list[dict] = field(default_factory=list)
+    slack_bot_token: str = ""  # Agent's own Slack bot token
+    _slack_client: object = field(default=None, repr=False)
 
-# âââ Agent Registry ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    @property
+    def slack_client(self):
+        """Lazy-init a WebClient for this agent's own bot token."""
+        if self._slack_client is None and self.slack_bot_token:
+            from slack_sdk import WebClient
+            self._slack_client = WebClient(token=self.slack_bot_token)
+            logging.getLogger("efy-bridge").info(f"[{self.code}] Initialized dedicated Slack client")
+        return self._slack_client
+
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Agent Registry Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 AGENT_CONFIGS = {
     "INV-09": AgentConfig(
@@ -84,6 +94,7 @@ AGENT_CONFIGS = {
             "file_id": os.environ.get("INV09_CREDENTIALS_FILE_ID", "file_011CaBdsoCWXTY1dtNWAF6Ur"),
             "mount_path": "/workspace/.env",
         }],
+        slack_bot_token=os.environ.get("INV09_SLACK_BOT_TOKEN", ""),
     ),
     "COS-01": AgentConfig(
         code="COS-01",
@@ -92,16 +103,17 @@ AGENT_CONFIGS = {
         environment_id=os.environ.get("COS01_ENVIRONMENT_ID", "env_01GSksEBrA6qNi25bFzQcorf"),
         vault_ids=[v for v in [os.environ.get("COS01_VAULT_ID")] if v],
         resources=[],
+        slack_bot_token=os.environ.get("COS01_SLACK_BOT_TOKEN", ""),
     ),
 }
 
-# Channel name â Agent code mapping
+# Channel name Ã¢ÂÂ Agent code mapping
 CHANNEL_ROUTING = {
     "inv-capital": "INV-09",
     "cos-centinela": "COS-01",
 }
 
-# Will be populated at startup: channel_id â AgentConfig
+# Will be populated at startup: channel_id Ã¢ÂÂ AgentConfig
 _channel_agent_map: dict[str, AgentConfig] = {}
 
 # Default agent for unrecognized channels
@@ -125,7 +137,7 @@ MAX_RESPONSE_LENGTH = 3900
 SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").lower() == "true"
 CST = timezone(timedelta(hours=-6))  # America/El_Salvador
 
-# âââ Logging ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Logging Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 logging.basicConfig(
     level=logging.INFO,
@@ -134,11 +146,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("efy-bridge")
 
-# âââ Anthropic Client âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Anthropic Client Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 ant = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# âââ Session Management ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Session Management Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 _sessions: dict[str, dict] = {}
 _session_lock = threading.Lock()
@@ -214,7 +226,7 @@ def send_and_wait(agent: AgentConfig, session_id: str, message: str) -> str:
         ],
     )
 
-    # Track state transitions: idle â processing â idle/ready/completed
+    # Track state transitions: idle Ã¢ÂÂ processing Ã¢ÂÂ idle/ready/completed
     saw_processing = False
     final_status = None
 
@@ -243,7 +255,7 @@ def send_and_wait(agent: AgentConfig, session_id: str, message: str) -> str:
         if status == "idle" and not saw_processing:
             continue
 
-        # Session errored â still try to extract any response the agent sent
+        # Session errored Ã¢ÂÂ still try to extract any response the agent sent
         if status in ("failed", "error"):
             log.warning(f"[{agent.code}] Session status={status}, checking for partial response...")
             text = _extract_last_assistant_text(session_id)
@@ -252,7 +264,7 @@ def send_and_wait(agent: AgentConfig, session_id: str, message: str) -> str:
                 return text
             return f"[Error: {agent.code} session ended with status '{status}']"
     else:
-        # Timeout â but still check if agent managed to respond
+        # Timeout Ã¢ÂÂ but still check if agent managed to respond
         log.warning(f"[{agent.code}] Poll timeout, checking for partial response...")
         text = _extract_last_assistant_text(session_id)
         if text:
@@ -267,11 +279,11 @@ def send_and_wait(agent: AgentConfig, session_id: str, message: str) -> str:
     return text
 
 
-# âââ Channel Resolution ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Channel Resolution Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def resolve_channels(client) -> None:
     """Map channel names to IDs at startup using Slack API."""
-    log.info("Resolving channel name â ID mapping...")
+    log.info("Resolving channel name Ã¢ÂÂ ID mapping...")
     try:
         result = client.conversations_list(
             types="public_channel,private_channel",
@@ -286,7 +298,7 @@ def resolve_channels(client) -> None:
                 agent = AGENT_CONFIGS.get(agent_code)
                 if agent:
                     _channel_agent_map[ch_id] = agent
-                    log.info(f"  #{ch_name} ({ch_id}) â {agent.code} {agent.name}")
+                    log.info(f"  #{ch_name} ({ch_id}) Ã¢ÂÂ {agent.code} {agent.name}")
 
     except Exception as e:
         log.error(f"Failed to resolve channels: {e}")
@@ -299,7 +311,7 @@ def resolve_channels(client) -> None:
             agent = AGENT_CONFIGS.get(agent_code)
             if agent:
                 _channel_agent_map[ch_id] = agent
-                log.info(f"  #{ch_name} ({ch_id}) â {agent.code} {agent.name} (from env)")
+                log.info(f"  #{ch_name} ({ch_id}) Ã¢ÂÂ {agent.code} {agent.name} (from env)")
 
 
 def get_agent_for_channel(channel_id: str) -> AgentConfig | None:
@@ -319,7 +331,7 @@ def get_channel_for_agent(agent_code: str) -> str | None:
     return None
 
 
-# âââ Slack App ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Slack App Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 app = App(token=SLACK_BOT_TOKEN)
 
@@ -348,6 +360,26 @@ def format_response(text: str) -> str:
 @app.event("message")
 def handle_message(event, say, client):
     pass
+
+
+def _post_as_agent(agent: AgentConfig, channel: str, text: str, thread_ts: str) -> None:
+    """Post a message as the agent's own Slack bot identity."""
+    post_kwargs = dict(
+        channel=channel,
+        text=text,
+        thread_ts=thread_ts,
+        unfurl_links=False,
+        unfurl_media=False,
+    )
+    agent_client = agent.slack_client
+    if agent_client:
+        log.info(f"[{agent.code}] Posting as dedicated bot identity")
+        agent_client.chat_postMessage(**post_kwargs)
+    else:
+        log.warning(f"[{agent.code}] No dedicated bot token â posting as bridge bot")
+        from slack_sdk import WebClient
+        fallback = WebClient(token=SLACK_BOT_TOKEN)
+        fallback.chat_postMessage(**post_kwargs)
 
 
 def _process_agent_request(event, say, client):
@@ -395,12 +427,7 @@ def _process_agent_request(event, say, client):
 
             chunks = split_message(response)
             for i, chunk in enumerate(chunks):
-                say(
-                    text=chunk,
-                    thread_ts=thread_ts,
-                    unfurl_links=False,
-                    unfurl_media=False,
-                )
+                _post_as_agent(agent, channel, chunk, thread_ts)
                 if i < len(chunks) - 1:
                     time.sleep(0.5)
 
@@ -435,7 +462,7 @@ def handle_mention(event, say, client):
         _process_agent_request(event, say, client)
 
 
-# âââ Scheduled Routines ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Scheduled Routines Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 @dataclass
 class RoutineConfig:
@@ -575,7 +602,7 @@ class RoutineScheduler:
 
         try:
             # Post routine announcement
-            header = f":{routine.emoji}: *{routine.name}* â Routine automÃ¡tica"
+            header = f":{routine.emoji}: *{routine.name}* Ã¢ÂÂ Routine automÃÂ¡tica"
             result = self._slack.chat_postMessage(
                 channel=channel_id,
                 text=header,
@@ -635,30 +662,30 @@ class RoutineScheduler:
 
         routines_by_id = {r.routine_id: r for r in ROUTINES}
 
-        # Daily CEO Briefing â 7:00 AM CST (13:00 UTC) weekdays
+        # Daily CEO Briefing Ã¢ÂÂ 7:00 AM CST (13:00 UTC) weekdays
         r = routines_by_id["daily-briefing"]
         schedule.every().day.at("13:00").do(self._safe_run, routine=r, weekday_only=True)
 
-        # Auto Email Triage â every 2h 8AM-6PM CST weekdays
+        # Auto Email Triage Ã¢ÂÂ every 2h 8AM-6PM CST weekdays
         # 8 CST=14 UTC, 10=16, 12=18, 14=20, 16=22, 18=00
         r = routines_by_id["email-triage"]
         for utc_hour in ["14:00", "16:00", "18:00", "20:00", "22:00", "00:00"]:
             schedule.every().day.at(utc_hour).do(self._safe_run, routine=r, weekday_only=True)
 
-        # Follow-Up Check â 9:00 AM CST (15:00 UTC) weekdays
+        # Follow-Up Check Ã¢ÂÂ 9:00 AM CST (15:00 UTC) weekdays
         r = routines_by_id["follow-up-check"]
         schedule.every().day.at("15:00").do(self._safe_run, routine=r, weekday_only=True)
 
-        # Investor Pipeline Check â 8:00 AM CST (14:30 UTC) weekdays
+        # Investor Pipeline Check Ã¢ÂÂ 8:00 AM CST (14:30 UTC) weekdays
         # Offset 30min from triage to avoid collision
         r = routines_by_id["pipeline-check"]
         schedule.every().day.at("14:30").do(self._safe_run, routine=r, weekday_only=True)
 
-        # Weekly Executive Summary â Friday 6:00 PM CST (00:00 UTC Saturday)
+        # Weekly Executive Summary Ã¢ÂÂ Friday 6:00 PM CST (00:00 UTC Saturday)
         r = routines_by_id["weekly-summary"]
         schedule.every().saturday.at("00:00").do(self._safe_run, routine=r)
 
-        # Calendar Optimizer â Sunday 7:00 PM CST (01:00 UTC Monday)
+        # Calendar Optimizer Ã¢ÂÂ Sunday 7:00 PM CST (01:00 UTC Monday)
         r = routines_by_id["calendar-optimizer"]
         schedule.every().monday.at("01:00").do(self._safe_run, routine=r)
 
@@ -686,7 +713,7 @@ class RoutineScheduler:
         self._running = False
 
 
-# âââ Main âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Main Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 if __name__ == "__main__":
     log.info("=" * 60)
@@ -694,10 +721,11 @@ if __name__ == "__main__":
     log.info("=" * 60)
     log.info("Registered agents:")
     for code, agent in AGENT_CONFIGS.items():
-        log.info(f"  {code} {agent.name}: {agent.agent_id}")
+        identity = "OWN BOT" if agent.slack_bot_token else "BRIDGE BOT (shared)"
+        log.info(f"  {code} {agent.name}: {agent.agent_id} [{identity}]")
     log.info("Channel routing:")
     for ch_name, agent_code in CHANNEL_ROUTING.items():
-        log.info(f"  #{ch_name} â {agent_code}")
+        log.info(f"  #{ch_name} Ã¢ÂÂ {agent_code}")
     log.info("-" * 60)
 
     # Resolve channel names to IDs
